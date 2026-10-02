@@ -1,282 +1,235 @@
-#pragma semicolon 1
-#pragma newdecls required
-
-#define PLUGIN_AUTHOR "RumbleFrog, SourceBans++ Dev Team"
-#define PLUGIN_VERSION "1.2.0"
-
-#include <sourcemod>
-#include <sourcebanspp>
-#include <sourcecomms>
-#include <SteamWorks>
-#include <jansson>
-
-enum
-{
-	Ban,
-	Report,
-	Comms,
-	Type_Count,
-	Type_Unknown,
-};
-
-int EmbedColors[Type_Count] =
-{
-	0xDA1D87,
-	0xF9D942,
-	0x4362FA,
-};
-
-ConVar Convars[Type_Count],
-	Username,
-	ProfilePictureURL,
-	WebsiteBaseURL,
-	DiscordRoleID;
-
-char sEndpoints[Type_Count][256],
-	sHostname[64],
-	sHost[64],
-	sDiscordRoleID[32];
-
-public Plugin myinfo =
-{
-	name = "SourceBans++ Discord Plugin",
-	author = PLUGIN_AUTHOR,
-	description = "Listens for ban & report forward and sends it to webhook endpoints",
-	version = PLUGIN_VERSION,
-	url = "https://sbpp.github.io"
-};
-
-public void OnPluginStart()
-{
-	CreateConVar("sbpp_discord_version", PLUGIN_VERSION, "SBPP Discord Version.", FCVAR_REPLICATED | FCVAR_SPONLY | FCVAR_DONTRECORD | FCVAR_NOTIFY);
-	Convars[Ban] = CreateConVar("sbpp_discord_banhook", "", "Discord web hook endpoint for ban forward. Leave empty to disable.", FCVAR_PROTECTED);
-	Convars[Report] = CreateConVar("sbpp_discord_reporthook", "", "Discord web hook endpoint for report forward. Leave empty to disable.", FCVAR_PROTECTED);
-	Convars[Comms] = CreateConVar("sbpp_discord_commshook", "", "Discord web hook endpoint for comms forward. Leave empty to disable.", FCVAR_PROTECTED);
-	WebsiteBaseURL = CreateConVar("sbpp_website_url", "", "The base url of your website. Leave empty to disable.");
-	Username = CreateConVar("sbpp_discord_username", "Sourcebans++", "The username of the webhook.");
-	ProfilePictureURL = CreateConVar("sbpp_discord_pp_url", "https://sbpp.github.io/img/favicons/android-chrome-512x512.png", "A URL pointing to the profile picture for the webhook.");
-	DiscordRoleID = CreateConVar("sbpp_discord_roleid", "", "The Discord role id that you would like mentioned when receiving a report. Leave empty to disable.");
-
-	AutoExecConfig(true, "sbpp_discord");
-
-	Convars[Ban].AddChangeHook(OnConvarChanged);
-	Convars[Report].AddChangeHook(OnConvarChanged);
-	Convars[Comms].AddChangeHook(OnConvarChanged);
-	DiscordRoleID.AddChangeHook(OnConvarChanged);
-}
-
 public void OnConfigsExecuted()
 {
 	FindConVar("hostname").GetString(sHostname, sizeof sHostname);
-
+	
 	int ip[4];
+	
+	SteamWorks_GetPublicIP(ip);
+	
 	if (SteamWorks_GetPublicIP(ip))
 	{
 		Format(sHost, sizeof sHost, "%d.%d.%d.%d:%d", ip[0], ip[1], ip[2], ip[3], FindConVar("hostport").IntValue);
-	}
-	else
+	} else
 	{
-		int ipAddress = FindConVar("hostip").IntValue;
-		Format(sHost, sizeof sHost, "%d.%d.%d.%d:%d", ipAddress >> 24 & 0x000000FF, ipAddress >> 16 & 0x000000FF, ipAddress >> 8 & 0x000000FF, ipAddress & 0x000000FF, FindConVar("hostport").IntValue);
+		int iIPB = FindConVar("hostip").IntValue;
+		Format(sHost, sizeof sHost, "%d.%d.%d.%d:%d", iIPB >> 24 & 0x000000FF, iIPB >> 16 & 0x000000FF, iIPB >> 8 & 0x000000FF, iIPB & 0x000000FF, FindConVar("hostport").IntValue);
 	}
-
+	
 	Convars[Ban].GetString(sEndpoints[Ban], sizeof sEndpoints[]);
 	Convars[Report].GetString(sEndpoints[Report], sizeof sEndpoints[]);
 	Convars[Comms].GetString(sEndpoints[Comms], sizeof sEndpoints[]);
 	DiscordRoleID.GetString(sDiscordRoleID, sizeof sDiscordRoleID);
 }
 
-public void SBPP_OnBanPlayer(int admin, int target, int time, const char[] reason)
+public void SBPP_OnBanPlayer(int iAdmin, int iTarget, int iTime, const char[] sReason)
 {
-	if (sEndpoints[Ban][0] != '\0')
-		SendReport(admin, target, reason, Ban, time);
+	if (!StrEqual(sEndpoints[Ban], ""))
+		SendReport(iAdmin, iTarget, sReason, Ban, iTime);
 }
 
-public void SourceComms_OnBlockAdded(int admin, int target, int time, int commType, char[] reason)
+public void SourceComms_OnBlockAdded(int iAdmin, int iTarget, int iTime, int iCommType, char[] sReason)
 {
-	if (sEndpoints[Comms][0] != '\0')
-		SendReport(admin, target, reason, Comms, time, commType);
+	if (!StrEqual(sEndpoints[Comms], ""))
+		SendReport(iAdmin, iTarget, sReason, Comms, iTime, iCommType);
 }
 
-public void SBPP_OnReportPlayer(int reporter, int target, const char[] reason)
+public void SBPP_OnReportPlayer(int iReporter, int iTarget, const char[] sReason)
 {
-	if (sEndpoints[Report][0] != '\0')
-		SendReport(reporter, target, reason, Report);
+	if (!StrEqual(sEndpoints[Report], ""))
+		SendReport(iReporter, iTarget, sReason, Report);
 }
 
-void SendReport(int client, int target, const char[] reason, int type = Ban, int time = -1, int extra = 0)
+void SendReport(int iClient, int iTarget, const char[] sReason, int iType = Ban, int iTime = -1, any extra = 0)
 {
-	if (!IsValidClient(target))
+	if (iTarget != -1 && !IsValidClient(iTarget))
 		return;
 
-	char author[MAX_NAME_LENGTH], targetName[MAX_NAME_LENGTH], authorID[32], targetID64[32], targetID[32];
-	char json[2048], buffer[512], username[128], profilePictureURL[256], websiteURL[512];
+	char sAuthor[MAX_NAME_LENGTH], 
+		sTarget[MAX_NAME_LENGTH], 
+		sAuthorID[32], 
+		sTargetID64[32], 
+		sTargetID[32], 
+		sJson[2048], 
+		sBuffer[256],
+		szUsername[128],
+		szProfilePictureURL[256];
 
-	ProfilePictureURL.GetString(profilePictureURL, sizeof profilePictureURL);
-	Username.GetString(username, sizeof username);
+	GetConVarString(ProfilePictureURL, szProfilePictureURL, sizeof szProfilePictureURL);
+	GetConVarString(Username, szUsername, sizeof szUsername);
 
-	if (IsValidClient(client))
+	if (IsValidClient(iClient))
 	{
-		GetClientName(client, author, sizeof author);
-		GetClientAuthId(client, AuthId_Steam2, authorID, sizeof authorID);
-	}
-	else
+		GetClientName(iClient, sAuthor, sizeof sAuthor);
+		GetClientAuthId(iClient, AuthId_Steam2, sAuthorID, sizeof sAuthorID);
+	} else
 	{
-		strcopy(author, sizeof author, "Console");
-		strcopy(authorID, sizeof authorID, "N/A");
-	}
-
-	GetClientAuthId(target, AuthId_SteamID64, targetID64, sizeof targetID64);
-	GetClientName(target, targetName, sizeof targetName);
-	GetClientAuthId(target, AuthId_Steam2, targetID, sizeof targetID);
-
-	JsonObject request = NewJsonObject();
-	JsonArray embeds = NewJsonArray();
-	JsonObject embed = NewJsonObject();
-	JsonObject fields = NewJsonArray();
-
-	embed.SetInt("color", GetEmbedColor(type));
-	WebsiteBaseURL.GetString(websiteURL, sizeof websiteURL);
-
-	if (type == Report && sDiscordRoleID[0] != '\0')
-	{
-		Format(buffer, sizeof buffer, "<@&%s>", sDiscordRoleID);
-		request.SetString("content", buffer);
+		Format(sAuthor, sizeof sAuthor, "Console");
+		Format(sAuthorID, sizeof sAuthorID, "N/A");
 	}
 
-	if (websiteURL[0] != '\0')
+	GetClientAuthId(iTarget, AuthId_SteamID64, sTargetID64, sizeof sTargetID64);
+	GetClientName(iTarget, sTarget, sizeof sTarget);
+	GetClientAuthId(iTarget, AuthId_Steam2, sTargetID, sizeof sTargetID);
+
+	Handle jRequest = json_object();
+
+	Handle jEmbeds = json_array();
+
+
+	Handle jContent = json_object();
+	
+	json_object_set(jContent, "color", json_integer(GetEmbedColor(iType)));
+
+	char szURLBuffer[512];
+	GetConVarString(WebsiteBaseURL, szURLBuffer, sizeof(szURLBuffer));
+
+	if (iType == Report && !StrEqual(sDiscordRoleID, ""))
 	{
-		embed.SetString("title", "View on Sourcebans");
-		if (type == Comms)
-			Format(buffer, sizeof buffer, "%s/index.php?p=commslist&searchText=%s", websiteURL, targetID);
-		else if (type == Ban)
-			Format(buffer, sizeof buffer, "%s/index.php?p=banlist&searchText=%s", websiteURL, targetID);
+		Format(sBuffer, sizeof sBuffer, "<@&%s>", sDiscordRoleID);
+		json_object_set_new(jRequest, "content", json_string(sBuffer));
+	}
+
+	if(!(StrEqual(szURLBuffer, "")))
+	{
+		json_object_set(jContent, "title", json_string("View on Sourcebans"));
+	
+		if(iType == Comms)
+			Format(sBuffer, sizeof sBuffer, "%s/index.php?p=commslist&searchText=%s", szURLBuffer, sTargetID);
+		else if (iType == Ban)
+			Format(sBuffer, sizeof sBuffer, "%s/index.php?p=banlist&searchText=%s", szURLBuffer, sTargetID);
+		else if (iType == Report)
+			Format(sBuffer, sizeof sBuffer, "%s/index.php?p=admin&c=bans#^2", szURLBuffer);
+		json_object_set(jContent, "url", json_string(sBuffer));
+	}
+
+	Handle jContentAuthor = json_object();
+
+	json_object_set_new(jContentAuthor, "name", json_string(sTarget));
+	Format(sBuffer, sizeof sBuffer, "https://steamcommunity.com/profiles/%s", sTargetID64);
+	json_object_set_new(jContentAuthor, "url", json_string(sBuffer));
+	json_object_set_new(jContentAuthor, "icon_url", json_string(szProfilePictureURL));
+	json_object_set_new(jContent, "author", jContentAuthor);
+
+	Handle jContentFooter = json_object();
+
+	Format(sBuffer, sizeof sBuffer, "%s (%s)", sHostname, sHost);
+	json_object_set_new(jContentFooter, "text", json_string(sBuffer));
+	json_object_set_new(jContentFooter, "icon_url", json_string(szProfilePictureURL));
+	json_object_set_new(jContent, "footer", jContentFooter);
+
+
+	Handle jFields = json_array();
+
+
+	Handle jFieldAuthor = json_object();
+	json_object_set_new(jFieldAuthor, "name", json_string("Author"));
+	Format(sBuffer, sizeof sBuffer, "%s (%s)", sAuthor, sAuthorID);
+	json_object_set_new(jFieldAuthor, "value", json_string(sBuffer));
+	json_object_set_new(jFieldAuthor, "inline", json_boolean(true));
+
+	Handle jFieldTarget = json_object();
+	json_object_set_new(jFieldTarget, "name", json_string("Target"));
+	Format(sBuffer, sizeof sBuffer, "%s (%s)", sTarget, sTargetID);
+	json_object_set_new(jFieldTarget, "value", json_string(sBuffer));
+	json_object_set_new(jFieldTarget, "inline", json_boolean(true));
+
+	Handle jFieldReason = json_object();
+	json_object_set_new(jFieldReason, "name", json_string("Reason"));
+	json_object_set_new(jFieldReason, "value", json_string(sReason));
+
+	json_array_append_new(jFields, jFieldAuthor);
+	json_array_append_new(jFields, jFieldTarget);
+
+	if (iType == Ban || iType == Comms)
+	{
+		Handle jFieldDuration = json_object();
+
+		json_object_set_new(jFieldDuration, "name", json_string("Duration"));
+
+		if (iTime > 0)
+			Format(sBuffer, sizeof sBuffer, "%d Minutes", iTime);
+		else if (iTime < 0)
+			Format(sBuffer, sizeof sBuffer, "Session");
 		else
-			Format(buffer, sizeof buffer, "%s/index.php?p=admin&c=bans#^2", websiteURL);
-		embed.SetString("url", buffer);
+			Format(sBuffer, sizeof sBuffer, "Permanent");
+
+		json_object_set_new(jFieldDuration, "value", json_string(sBuffer));
+
+		json_array_append_new(jFields, jFieldDuration);
 	}
-
-	JsonObject authorObject = NewJsonObject();
-	authorObject.SetString("name", targetName);
-	Format(buffer, sizeof buffer, "https://steamcommunity.com/profiles/%s", targetID64);
-	authorObject.SetString("url", buffer);
-	authorObject.SetString("icon_url", profilePictureURL);
-	embed.Set("author", authorObject);
-	delete authorObject;
-
-	JsonObject footer = NewJsonObject();
-	Format(buffer, sizeof buffer, "%s (%s)", sHostname, sHost);
-	footer.SetString("text", buffer);
-	footer.SetString("icon_url", profilePictureURL);
-	embed.Set("footer", footer);
-	delete footer;
-
-	JsonObject authorField = NewJsonObject();
-	authorField.SetString("name", "Author");
-	Format(buffer, sizeof buffer, "%s (%s)", author, authorID);
-	authorField.SetString("value", buffer);
-	authorField.SetBool("inline", true);
-	asJSONA(fields).Push(authorField);
-	delete authorField;
-
-	JsonObject targetField = NewJsonObject();
-	targetField.SetString("name", "Target");
-	Format(buffer, sizeof buffer, "%s (%s)", targetName, targetID);
-	targetField.SetString("value", buffer);
-	targetField.SetBool("inline", true);
-	asJSONA(fields).Push(targetField);
-	delete targetField;
-
-	if (type == Ban || type == Comms)
+	
+	if (iType == Comms)
 	{
-		JsonObject durationField = NewJsonObject();
-		durationField.SetString("name", "Duration");
-		if (time > 0)
-			Format(buffer, sizeof buffer, "%d Minutes", time);
-		else if (time < 0)
-			strcopy(buffer, sizeof buffer, "Session");
-		else
-			strcopy(buffer, sizeof buffer, "Permanent");
-		durationField.SetString("value", buffer);
-		asJSONA(fields).Push(durationField);
-		delete durationField;
+		Handle jFieldCommType = json_object();
+		
+		json_object_set_new(jFieldCommType, "name", json_string("Comm Type"));
+		
+		char cType[32];
+		
+		GetCommType(cType, sizeof cType, extra);
+		
+		json_object_set_new(jFieldCommType, "value", json_string(cType));
+		
+		json_array_append_new(jFields, jFieldCommType);
 	}
 
-	if (type == Comms)
-	{
-		JsonObject commTypeField = NewJsonObject();
-		char commTypeName[32];
-		commTypeField.SetString("name", "Comm Type");
-		GetCommType(commTypeName, sizeof commTypeName, extra);
-		commTypeField.SetString("value", commTypeName);
-		asJSONA(fields).Push(commTypeField);
-		delete commTypeField;
-	}
+	json_array_append_new(jFields, jFieldReason);
 
-	JsonObject reasonField = NewJsonObject();
-	reasonField.SetString("name", "Reason");
-	reasonField.SetString("value", reason);
-	asJSONA(fields).Push(reasonField);
-	delete reasonField;
 
-	embed.Set("fields", fields);
-	delete fields;
-	asJSONA(embeds).Push(embed);
-	delete embed;
+	json_object_set_new(jContent, "fields", jFields);
 
-	request.SetString("username", username);
-	request.SetString("avatar_url", profilePictureURL);
-	request.Set("embeds", embeds);
-	delete embeds;
 
-	if (!request.Dump(json, sizeof json, Compact, true))
-	{
-		delete request;
-		return;
-	}
+	json_array_append_new(jEmbeds, jContent);
 
-#if defined DEBUG
-	PrintToServer(json);
-#endif
+	json_object_set_new(jRequest, "username", json_string(szUsername));
+	json_object_set_new(jRequest, "avatar_url", json_string(szProfilePictureURL));
+	json_object_set_new(jRequest, "embeds", jEmbeds);
 
-	char endpoint[256];
-	GetEndpoint(endpoint, sizeof endpoint, type);
-	Handle requestHandle = SteamWorks_CreateHTTPRequest(k_EHTTPMethodPOST, endpoint);
-	SteamWorks_SetHTTPRequestContextValue(requestHandle, client, target);
-	SteamWorks_SetHTTPRequestGetOrPostParameter(requestHandle, "payload_json", json);
-	SteamWorks_SetHTTPCallbacks(requestHandle, OnHTTPRequestComplete);
 
-	if (!SteamWorks_SendHTTPRequest(requestHandle))
-		LogError("HTTP request failed for %s against %s", author, targetName);
+	json_dump(jRequest, sJson, sizeof sJson, 0, false, false, true);
+
+	#if defined DEBUG
+		PrintToServer(sJson);
+	#endif
+
+	CloseHandle(jRequest);
+	
+	char sEndpoint[256];
+	
+	GetEndpoint(sEndpoint, sizeof sEndpoint, iType);
+
+	Handle hRequest = SteamWorks_CreateHTTPRequest(k_EHTTPMethodPOST, sEndpoint);
+
+	SteamWorks_SetHTTPRequestContextValue(hRequest, iClient, iTarget);
+	SteamWorks_SetHTTPRequestGetOrPostParameter(hRequest, "payload_json", sJson);
+	SteamWorks_SetHTTPCallbacks(hRequest, OnHTTPRequestComplete);
+
+	if (!SteamWorks_SendHTTPRequest(hRequest))
+		LogError("HTTP request failed for %s against %s", sAuthor, sTarget);
 }
 
-JsonObject NewJsonObject()
+public void OnHTTPRequestComplete(Handle hRequest, bool bFailure, bool bRequestSuccessful, EHTTPStatusCode eStatusCode, int iClient, int iTarget)
 {
-	return view_as<JsonObject>(new Json("{}"));
-}
-
-JsonArray NewJsonArray()
-{
-	return view_as<JsonArray>(new Json("[]"));
-}
-
-public void OnHTTPRequestComplete(Handle request, bool failure, bool requestSuccessful, EHTTPStatusCode statusCode, int client, int target)
-{
-	if (!requestSuccessful || statusCode != k_EHTTPStatusCode204NoContent)
+	if (!bRequestSuccessful || eStatusCode != k_EHTTPStatusCode204NoContent)
 	{
-		LogError("HTTP request failed for %N against %N", client, target);
-#if defined DEBUG
-		int size;
-		SteamWorks_GetHTTPResponseBodySize(request, size);
-		char[] body = new char[size];
-		SteamWorks_GetHTTPResponseBodyData(request, body, size);
-		PrintToServer(body);
-		PrintToServer("Status Code: %d", statusCode);
-		PrintToServer("SteamWorks_IsLoaded: %d", SteamWorks_IsLoaded());
-#endif
+		LogError("HTTP request failed for %N against %N", iClient, iTarget);
+
+		#if defined DEBUG
+			int iSize;
+
+			SteamWorks_GetHTTPResponseBodySize(hRequest, iSize);
+
+			char[] sBody = new char[iSize];
+
+			SteamWorks_GetHTTPResponseBodyData(hRequest, sBody, iSize);
+
+			PrintToServer(sBody);
+			PrintToServer("Status Code: %d", eStatusCode);
+			PrintToServer("SteamWorks_IsLoaded: %d", SteamWorks_IsLoaded());
+		#endif
 	}
 
-	delete request;
+	CloseHandle(hRequest);
 }
 
 public void OnConvarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
@@ -291,30 +244,48 @@ public void OnConvarChanged(ConVar convar, const char[] oldValue, const char[] n
 		DiscordRoleID.GetString(sDiscordRoleID, sizeof sDiscordRoleID);
 }
 
-int GetEmbedColor(int type)
+int GetEmbedColor(int iType)
 {
-	if (type != Type_Unknown)
-		return EmbedColors[type];
+	if (iType != Type_Unknown)
+		return EmbedColors[iType];
+	
 	return EmbedColors[Ban];
 }
 
-void GetEndpoint(char[] buffer, int bufferSize, int type)
+void GetEndpoint(char[] sBuffer, int iBufferSize, int iType)
 {
-	strcopy(buffer, bufferSize, sEndpoints[type]);
+	if (!StrEqual(sEndpoints[iType], ""))
+	{
+		strcopy(sBuffer, iBufferSize, sEndpoints[iType]);
+		return;
+	}
+	strcopy(sBuffer, iBufferSize, "");
 }
 
-void GetCommType(char[] buffer, int bufferSize, int type)
+void GetCommType(char[] sBuffer, int iBufferSize, int iType)
 {
-	switch (type)
+	switch (iType)
 	{
-		case TYPE_MUTE: strcopy(buffer, bufferSize, "Mute");
-		case TYPE_GAG: strcopy(buffer, bufferSize, "Gag");
-		case TYPE_SILENCE: strcopy(buffer, bufferSize, "Silence");
-		default: strcopy(buffer, bufferSize, "Unknown");
+		case TYPE_MUTE:
+			strcopy(sBuffer, iBufferSize, "Mute");
+		case TYPE_GAG:
+			strcopy(sBuffer, iBufferSize, "Gag");
+		case TYPE_SILENCE:
+			strcopy(sBuffer, iBufferSize, "Silence");
 	}
 }
 
-stock bool IsValidClient(int client, bool alive = false)
+stock bool IsValidClient(int iClient, bool bAlive = false)
 {
-	return client >= 1 && client <= MaxClients && IsClientConnected(client) && IsClientInGame(client) && !IsFakeClient(client) && (!alive || IsPlayerAlive(client));
+	if (iClient >= 1 &&
+	iClient <= MaxClients &&
+	IsClientConnected(iClient) &&
+	IsClientInGame(iClient) &&
+	!IsFakeClient(iClient) &&
+	(bAlive == false || IsPlayerAlive(iClient)))
+	{
+		return true;
+	}
+
+	return false;
 }
