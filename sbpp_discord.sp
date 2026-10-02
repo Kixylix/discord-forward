@@ -7,7 +7,7 @@
 #include <sourcebanspp>
 #include <sourcecomms>
 #include <SteamWorks>
-#include <jansson>
+#include <smjansson>
 
 #pragma newdecls required
 
@@ -74,451 +74,292 @@ public void OnPluginStart()
 
 public void OnConfigsExecuted()
 {
-	FindConVar("hostname").GetString(sHostname, sizeof(sHostname));
-
+	FindConVar("hostname").GetString(sHostname, sizeof sHostname);
+	
 	int ip[4];
-
+	
+	SteamWorks_GetPublicIP(ip);
+	
 	if (SteamWorks_GetPublicIP(ip))
 	{
-		Format(
-			sHost,
-			sizeof(sHost),
-			"%d.%d.%d.%d:%d",
-			ip[0],
-			ip[1],
-			ip[2],
-			ip[3],
-			FindConVar("hostport").IntValue
-		);
-	}
-	else
+		Format(sHost, sizeof sHost, "%d.%d.%d.%d:%d", ip[0], ip[1], ip[2], ip[3], FindConVar("hostport").IntValue);
+	} else
 	{
 		int iIPB = FindConVar("hostip").IntValue;
-
-		Format(
-			sHost,
-			sizeof(sHost),
-			"%d.%d.%d.%d:%d",
-			(iIPB >> 24) & 0xFF,
-			(iIPB >> 16) & 0xFF,
-			(iIPB >> 8) & 0xFF,
-			iIPB & 0xFF,
-			FindConVar("hostport").IntValue
-		);
+		Format(sHost, sizeof sHost, "%d.%d.%d.%d:%d", iIPB >> 24 & 0x000000FF, iIPB >> 16 & 0x000000FF, iIPB >> 8 & 0x000000FF, iIPB & 0x000000FF, FindConVar("hostport").IntValue);
 	}
-
-	Convars[Ban].GetString(sEndpoints[Ban], sizeof(sEndpoints[]));
-	Convars[Report].GetString(sEndpoints[Report], sizeof(sEndpoints[]));
-	Convars[Comms].GetString(sEndpoints[Comms], sizeof(sEndpoints[]));
-	DiscordRoleID.GetString(sDiscordRoleID, sizeof(sDiscordRoleID));
+	
+	Convars[Ban].GetString(sEndpoints[Ban], sizeof sEndpoints[]);
+	Convars[Report].GetString(sEndpoints[Report], sizeof sEndpoints[]);
+	Convars[Comms].GetString(sEndpoints[Comms], sizeof sEndpoints[]);
+	DiscordRoleID.GetString(sDiscordRoleID, sizeof sDiscordRoleID);
 }
 
-public void SBPP_OnBanPlayer(
-	int iAdmin,
-	int iTarget,
-	int iTime,
-	const char[] sReason
-)
+public void SBPP_OnBanPlayer(int iAdmin, int iTarget, int iTime, const char[] sReason)
 {
-	if (sEndpoints[Ban][0] != '\0')
-	{
+	if (!StrEqual(sEndpoints[Ban], ""))
 		SendReport(iAdmin, iTarget, sReason, Ban, iTime);
-	}
 }
 
-public void SourceComms_OnBlockAdded(
-	int iAdmin,
-	int iTarget,
-	int iTime,
-	int iCommType,
-	char[] sReason
-)
+public void SourceComms_OnBlockAdded(int iAdmin, int iTarget, int iTime, int iCommType, char[] sReason)
 {
-	if (sEndpoints[Comms][0] != '\0')
-	{
+	if (!StrEqual(sEndpoints[Comms], ""))
 		SendReport(iAdmin, iTarget, sReason, Comms, iTime, iCommType);
-	}
 }
 
-public void SBPP_OnReportPlayer(
-	int iReporter,
-	int iTarget,
-	const char[] sReason
-)
+public void SBPP_OnReportPlayer(int iReporter, int iTarget, const char[] sReason)
 {
-	if (sEndpoints[Report][0] != '\0')
-	{
+	if (!StrEqual(sEndpoints[Report], ""))
 		SendReport(iReporter, iTarget, sReason, Report);
-	}
 }
 
-void SendReport(
-	int iClient,
-	int iTarget,
-	const char[] sReason,
-	int iType = Ban,
-	int iTime = -1,
-	any extra = 0
-)
+void SendReport(int iClient, int iTarget, const char[] sReason, int iType = Ban, int iTime = -1, any extra = 0)
 {
-	/*
-	 * The target is always used below, so do not allow -1 here.
-	 */
-	if (!IsValidClient(iTarget))
+	if (iTarget != -1 && !IsValidClient(iTarget))
 		return;
 
-	char sAuthor[MAX_NAME_LENGTH];
-	char sTarget[MAX_NAME_LENGTH];
-	char sAuthorID[32];
-	char sTargetID64[32];
-	char sTargetID[32];
+	char sAuthor[MAX_NAME_LENGTH], 
+		sTarget[MAX_NAME_LENGTH], 
+		sAuthorID[32], 
+		sTargetID64[32], 
+		sTargetID[32], 
+		sJson[2048], 
+		sBuffer[256],
+		szUsername[128],
+		szProfilePictureURL[256];
 
-	char sJson[8192];
-	char sBuffer[512];
-	char szUsername[128];
-	char szProfilePictureURL[256];
-	char szWebsiteBaseURL[512];
-
-	GetConVarString(
-		ProfilePictureURL,
-		szProfilePictureURL,
-		sizeof(szProfilePictureURL)
-	);
-
-	GetConVarString(
-		Username,
-		szUsername,
-		sizeof(szUsername)
-	);
-
-	GetConVarString(
-		WebsiteBaseURL,
-		szWebsiteBaseURL,
-		sizeof(szWebsiteBaseURL)
-	);
+	GetConVarString(ProfilePictureURL, szProfilePictureURL, sizeof szProfilePictureURL);
+	GetConVarString(Username, szUsername, sizeof szUsername);
 
 	if (IsValidClient(iClient))
 	{
-		GetClientName(iClient, sAuthor, sizeof(sAuthor));
-		GetClientAuthId(
-			iClient,
-			AuthId_Steam2,
-			sAuthorID,
-			sizeof(sAuthorID)
-		);
-	}
-	else
+		GetClientName(iClient, sAuthor, sizeof sAuthor);
+		GetClientAuthId(iClient, AuthId_Steam2, sAuthorID, sizeof sAuthorID);
+	} else
 	{
-		strcopy(sAuthor, sizeof(sAuthor), "Console");
-		strcopy(sAuthorID, sizeof(sAuthorID), "N/A");
+		Format(sAuthor, sizeof sAuthor, "Console");
+		Format(sAuthorID, sizeof sAuthorID, "N/A");
 	}
 
-	GetClientName(iTarget, sTarget, sizeof(sTarget));
+	GetClientAuthId(iTarget, AuthId_SteamID64, sTargetID64, sizeof sTargetID64);
+	GetClientName(iTarget, sTarget, sizeof sTarget);
+	GetClientAuthId(iTarget, AuthId_Steam2, sTargetID, sizeof sTargetID);
 
-	GetClientAuthId(
-		iTarget,
-		AuthId_SteamID64,
-		sTargetID64,
-		sizeof(sTargetID64)
-	);
+	Handle jRequest = json_object();
 
-	GetClientAuthId(
-		iTarget,
-		AuthId_Steam2,
-		sTargetID,
-		sizeof(sTargetID)
-	);
+	Handle jEmbeds = json_array();
 
-	/*
-	 * Root request:
-	 *
-	 * {
-	 *     "username": "...",
-	 *     "avatar_url": "...",
-	 *     "content": "...",
-	 *     "embeds": [...]
-	 * }
-	 */
-	JsonObject jRequest =
-		view_as<JsonObject>(new Json("{}"));
 
-	JsonArray jEmbeds =
-		view_as<JsonArray>(new Json("[]"));
+	Handle jContent = json_object();
+	
+	json_object_set(jContent, "color", json_integer(GetEmbedColor(iType)));
 
-	JsonObject jEmbed =
-		view_as<JsonObject>(new Json("{}"));
+	char szURLBuffer[512];
+	GetConVarString(WebsiteBaseURL, szURLBuffer, sizeof(szURLBuffer));
 
-	jEmbed.SetInt(
-		"color",
-		GetEmbedColor(iType)
-	);
-
-	if (iType == Report && sDiscordRoleID[0] != '\0')
+	if (iType == Report && !StrEqual(sDiscordRoleID, ""))
 	{
-		Format(
-			sBuffer,
-			sizeof(sBuffer),
-			"<@&%s>",
-			sDiscordRoleID
-		);
-
-		jRequest.SetString("content", sBuffer);
+		Format(sBuffer, sizeof sBuffer, "<@&%s>", sDiscordRoleID);
+		json_object_set_new(jRequest, "content", json_string(sBuffer));
 	}
 
-	if (szWebsiteBaseURL[0] != '\0')
+	if(!(StrEqual(szURLBuffer, "")))
 	{
-		jEmbed.SetString(
-			"title",
-			"View on Sourcebans"
-		);
-
-		if (iType == Comms)
-		{
-			Format(
-				sBuffer,
-				sizeof(sBuffer),
-				"%s/index.php?p=commslist&searchText=%s",
-				szWebsiteBaseURL,
-				sTargetID
-			);
-		}
+		json_object_set(jContent, "title", json_string("View on Sourcebans"));
+	
+		if(iType == Comms)
+			Format(sBuffer, sizeof sBuffer, "%s/index.php?p=commslist&searchText=%s", szURLBuffer, sTargetID);
 		else if (iType == Ban)
-		{
-			Format(
-				sBuffer,
-				sizeof(sBuffer),
-				"%s/index.php?p=banlist&searchText=%s",
-				szWebsiteBaseURL,
-				sTargetID
-			);
-		}
+			Format(sBuffer, sizeof sBuffer, "%s/index.php?p=banlist&searchText=%s", szURLBuffer, sTargetID);
 		else if (iType == Report)
-		{
-			Format(
-				sBuffer,
-				sizeof(sBuffer),
-				"%s/index.php?p=admin&c=bans#^2",
-				szWebsiteBaseURL
-			);
-		}
-
-		jEmbed.SetString("url", sBuffer);
+			Format(sBuffer, sizeof sBuffer, "%s/index.php?p=admin&c=bans#^2", szURLBuffer);
+		json_object_set(jContent, "url", json_string(sBuffer));
 	}
 
-	/*
-	 * Embed author.
-	 */
-	JsonObject jAuthor =
-		view_as<JsonObject>(new Json("{}"));
+	Handle jContentAuthor = json_object();
 
-	jAuthor.SetString("name", sTarget);
+	json_object_set_new(jContentAuthor, "name", json_string(sTarget));
+	Format(sBuffer, sizeof sBuffer, "https://steamcommunity.com/profiles/%s", sTargetID64);
+	json_object_set_new(jContentAuthor, "url", json_string(sBuffer));
+	json_object_set_new(jContentAuthor, "icon_url", json_string(szProfilePictureURL));
+	json_object_set_new(jContent, "author", jContentAuthor);
 
-	Format(
-		sBuffer,
-		sizeof(sBuffer),
-		"https://steamcommunity.com/profiles/%s",
-		sTargetID64
-	);
+	Handle jContentFooter = json_object();
 
-	jAuthor.SetString("url", sBuffer);
-	jAuthor.SetString("icon_url", szProfilePictureURL);
+	Format(sBuffer, sizeof sBuffer, "%s (%s)", sHostname, sHost);
+	json_object_set_new(jContentFooter, "text", json_string(sBuffer));
+	json_object_set_new(jContentFooter, "icon_url", json_string(szProfilePictureURL));
+	json_object_set_new(jContent, "footer", jContentFooter);
 
-	jEmbed.Set("author", jAuthor);
 
-	/*
-	 * Embed footer.
-	 */
-	JsonObject jFooter =
-		view_as<JsonObject>(new Json("{}"));
+	Handle jFields = json_array();
 
-	Format(
-		sBuffer,
-		sizeof(sBuffer),
-		"%s (%s)",
-		sHostname,
-		sHost
-	);
 
-	jFooter.SetString("text", sBuffer);
-	jFooter.SetString("icon_url", szProfilePictureURL);
+	Handle jFieldAuthor = json_object();
+	json_object_set_new(jFieldAuthor, "name", json_string("Author"));
+	Format(sBuffer, sizeof sBuffer, "%s (%s)", sAuthor, sAuthorID);
+	json_object_set_new(jFieldAuthor, "value", json_string(sBuffer));
+	json_object_set_new(jFieldAuthor, "inline", json_boolean(true));
 
-	jEmbed.Set("footer", jFooter);
+	Handle jFieldTarget = json_object();
+	json_object_set_new(jFieldTarget, "name", json_string("Target"));
+	Format(sBuffer, sizeof sBuffer, "%s (%s)", sTarget, sTargetID);
+	json_object_set_new(jFieldTarget, "value", json_string(sBuffer));
+	json_object_set_new(jFieldTarget, "inline", json_boolean(true));
 
-	/*
-	 * Embed fields.
-	 */
-	JsonArray jFields =
-		view_as<JsonArray>(new Json("[]"));
+	Handle jFieldReason = json_object();
+	json_object_set_new(jFieldReason, "name", json_string("Reason"));
+	json_object_set_new(jFieldReason, "value", json_string(sReason));
 
-	JsonObject jFieldAuthor =
-		view_as<JsonObject>(new Json("{}"));
-
-	jFieldAuthor.SetString("name", "Author");
-
-	Format(
-		sBuffer,
-		sizeof(sBuffer),
-		"%s (%s)",
-		sAuthor,
-		sAuthorID
-	);
-
-	jFieldAuthor.SetString("value", sBuffer);
-	jFieldAuthor.SetBool("inline", true);
-
-	jFields.Push(jFieldAuthor);
-
-	JsonObject jFieldTarget =
-		view_as<JsonObject>(new Json("{}"));
-
-	jFieldTarget.SetString("name", "Target");
-
-	Format(
-		sBuffer,
-		sizeof(sBuffer),
-		"%s (%s)",
-		sTarget,
-		sTargetID
-	);
-
-	jFieldTarget.SetString("value", sBuffer);
-	jFieldTarget.SetBool("inline", true);
-
-	jFields.Push(jFieldTarget);
+	json_array_append_new(jFields, jFieldAuthor);
+	json_array_append_new(jFields, jFieldTarget);
 
 	if (iType == Ban || iType == Comms)
 	{
-		JsonObject jFieldDuration =
-			view_as<JsonObject>(new Json("{}"));
+		Handle jFieldDuration = json_object();
 
-		jFieldDuration.SetString("name", "Duration");
+		json_object_set_new(jFieldDuration, "name", json_string("Duration"));
 
 		if (iTime > 0)
-		{
-			Format(
-				sBuffer,
-				sizeof(sBuffer),
-				"%d Minutes",
-				iTime
-			);
-		}
+			Format(sBuffer, sizeof sBuffer, "%d Minutes", iTime);
 		else if (iTime < 0)
-		{
-			strcopy(
-				sBuffer,
-				sizeof(sBuffer),
-				"Session"
-			);
-		}
+			Format(sBuffer, sizeof sBuffer, "Session");
 		else
-		{
-			strcopy(
-				sBuffer,
-				sizeof(sBuffer),
-				"Permanent"
-			);
-		}
+			Format(sBuffer, sizeof sBuffer, "Permanent");
 
-		jFieldDuration.SetString("value", sBuffer);
-		jFields.Push(jFieldDuration);
+		json_object_set_new(jFieldDuration, "value", json_string(sBuffer));
+
+		json_array_append_new(jFields, jFieldDuration);
 	}
-
+	
 	if (iType == Comms)
 	{
-		JsonObject jFieldCommType =
-			view_as<JsonObject>(new Json("{}"));
-
-		jFieldCommType.SetString("name", "Comm Type");
-
-		char sCommType[32];
-		GetCommType(sCommType, sizeof(sCommType), extra);
-
-		jFieldCommType.SetString("value", sCommType);
-		jFields.Push(jFieldCommType);
+		Handle jFieldCommType = json_object();
+		
+		json_object_set_new(jFieldCommType, "name", json_string("Comm Type"));
+		
+		char cType[32];
+		
+		GetCommType(cType, sizeof cType, extra);
+		
+		json_object_set_new(jFieldCommType, "value", json_string(cType));
+		
+		json_array_append_new(jFields, jFieldCommType);
 	}
 
-	JsonObject jFieldReason =
-		view_as<JsonObject>(new Json("{}"));
+	json_array_append_new(jFields, jFieldReason);
 
-	jFieldReason.SetString("name", "Reason");
-	jFieldReason.SetString("value", sReason);
 
-	jFields.Push(jFieldReason);
+	json_object_set_new(jContent, "fields", jFields);
 
-	jEmbed.Set("fields", jFields);
-	jEmbeds.Push(jEmbed);
 
-	/*
-	 * Complete request.
-	 */
-	jRequest.SetString("username", szUsername);
-	jRequest.SetString("avatar_url", szProfilePictureURL);
-	jRequest.Set("embeds", jEmbeds);
+	json_array_append_new(jEmbeds, jContent);
+
+	json_object_set_new(jRequest, "username", json_string(szUsername));
+	json_object_set_new(jRequest, "avatar_url", json_string(szProfilePictureURL));
+	json_object_set_new(jRequest, "embeds", jEmbeds);
+
+
+	json_dump(jRequest, sJson, sizeof sJson, 0, false, false, true);
 
 	#if defined DEBUG
-		char sDebugJson[8192];
-
-		if (jRequest.Dump(sDebugJson, sizeof(sDebugJson), Compact))
-		{
-			PrintToServer("%s", sDebugJson);
-		}
+		PrintToServer(sJson);
 	#endif
 
+	CloseHandle(jRequest);
+	
 	char sEndpoint[256];
-	GetEndpoint(sEndpoint, sizeof(sEndpoint), iType);
+	
+	GetEndpoint(sEndpoint, sizeof sEndpoint, iType);
 
-	if (sEndpoint[0] == '\0')
-	{
-		delete jRequest;
-		return;
-	}
+	Handle hRequest = SteamWorks_CreateHTTPRequest(k_EHTTPMethodPOST, sEndpoint);
 
-	/*
-	 * Dump() with freeHandle=true deletes jRequest after
-	 * successfully creating the JSON string.
-	 */
-	if (!jRequest.Dump(sJson, sizeof(sJson), Compact, true))
-	{
-		LogError("Could not encode Discord JSON payload");
-		return;
-	}
-
-	Handle hRequest = SteamWorks_CreateHTTPRequest(
-		k_EHTTPMethodPOST,
-		sEndpoint
-	);
-
-	if (hRequest == null)
-	{
-		LogError("Could not create HTTP request for Discord webhook");
-		return;
-	}
-
-	SteamWorks_SetHTTPRequestContextValue(
-		hRequest,
-		iClient,
-		iTarget
-	);
-
-	SteamWorks_SetHTTPRequestGetOrPostParameter(
-		hRequest,
-		"payload_json",
-		sJson
-	);
-
-	SteamWorks_SetHTTPCallbacks(
-		hRequest,
-		OnHTTPRequestComplete
-	);
+	SteamWorks_SetHTTPRequestContextValue(hRequest, iClient, iTarget);
+	SteamWorks_SetHTTPRequestGetOrPostParameter(hRequest, "payload_json", sJson);
+	SteamWorks_SetHTTPCallbacks(hRequest, OnHTTPRequestComplete);
 
 	if (!SteamWorks_SendHTTPRequest(hRequest))
-	{
-		LogError(
-			"HTTP request failed for %s against %s",
-			sAuthor,
-			sTarget
-		);
+		LogError("HTTP request failed for %s against %s", sAuthor, sTarget);
+}
 
-		CloseHandle(hRequest);
+public void OnHTTPRequestComplete(Handle hRequest, bool bFailure, bool bRequestSuccessful, EHTTPStatusCode eStatusCode, int iClient, int iTarget)
+{
+	if (!bRequestSuccessful || eStatusCode != k_EHTTPStatusCode204NoContent)
+	{
+		LogError("HTTP request failed for %N against %N", iClient, iTarget);
+
+		#if defined DEBUG
+			int iSize;
+
+			SteamWorks_GetHTTPResponseBodySize(hRequest, iSize);
+
+			char[] sBody = new char[iSize];
+
+			SteamWorks_GetHTTPResponseBodyData(hRequest, sBody, iSize);
+
+			PrintToServer(sBody);
+			PrintToServer("Status Code: %d", eStatusCode);
+			PrintToServer("SteamWorks_IsLoaded: %d", SteamWorks_IsLoaded());
+		#endif
 	}
+
+	CloseHandle(hRequest);
+}
+
+public void OnConvarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
+{
+	if (convar == Convars[Ban])
+		Convars[Ban].GetString(sEndpoints[Ban], sizeof sEndpoints[]);
+	else if (convar == Convars[Report])
+		Convars[Report].GetString(sEndpoints[Report], sizeof sEndpoints[]);
+	else if (convar == Convars[Comms])
+		Convars[Comms].GetString(sEndpoints[Comms], sizeof sEndpoints[]);
+	else if (convar == DiscordRoleID)
+		DiscordRoleID.GetString(sDiscordRoleID, sizeof sDiscordRoleID);
+}
+
+int GetEmbedColor(int iType)
+{
+	if (iType != Type_Unknown)
+		return EmbedColors[iType];
+	
+	return EmbedColors[Ban];
+}
+
+void GetEndpoint(char[] sBuffer, int iBufferSize, int iType)
+{
+	if (!StrEqual(sEndpoints[iType], ""))
+	{
+		strcopy(sBuffer, iBufferSize, sEndpoints[iType]);
+		return;
+	}
+	strcopy(sBuffer, iBufferSize, "");
+}
+
+void GetCommType(char[] sBuffer, int iBufferSize, int iType)
+{
+	switch (iType)
+	{
+		case TYPE_MUTE:
+			strcopy(sBuffer, iBufferSize, "Mute");
+		case TYPE_GAG:
+			strcopy(sBuffer, iBufferSize, "Gag");
+		case TYPE_SILENCE:
+			strcopy(sBuffer, iBufferSize, "Silence");
+	}
+}
+
+stock bool IsValidClient(int iClient, bool bAlive = false)
+{
+	if (iClient >= 1 &&
+	iClient <= MaxClients &&
+	IsClientConnected(iClient) &&
+	IsClientInGame(iClient) &&
+	!IsFakeClient(iClient) &&
+	(bAlive == false || IsPlayerAlive(iClient)))
+	{
+		return true;
+	}
+
+	return false;
 }
