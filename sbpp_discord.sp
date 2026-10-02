@@ -1,3 +1,77 @@
+#pragma semicolon 1
+
+#define PLUGIN_AUTHOR "RumbleFrog, SourceBans++ Dev Team"
+#define PLUGIN_VERSION "1.2.0"
+
+#include <sourcemod>
+#include <sourcebanspp>
+#include <sourcecomms>
+#include <SteamWorks>
+#include <smjansson>
+
+#pragma newdecls required
+
+enum
+{
+	Ban,
+	Report,
+	Comms,
+	Type_Count,
+	Type_Unknown,
+};
+
+int EmbedColors[Type_Count] = {
+	0xDA1D87, // Ban
+	0xF9D942, // Report
+	0x4362FA, // Comms
+};
+
+ConVar Convars[Type_Count],
+	Username,
+	ProfilePictureURL,
+	WebsiteBaseURL,
+	DiscordRoleID;
+
+char sEndpoints[Type_Count][256]
+	, sHostname[64]
+	, sHost[64]
+	, sDiscordRoleID[32];
+
+public Plugin myinfo =
+{
+	name = "SourceBans++ Discord Plugin",
+	author = PLUGIN_AUTHOR,
+	description = "Listens for ban & report forward and sends it to webhook endpoints",
+	version = PLUGIN_VERSION,
+	url = "https://sbpp.github.io"
+};
+
+public void OnPluginStart()
+{
+	CreateConVar("sbpp_discord_version", PLUGIN_VERSION, "SBPP Discord Version.", FCVAR_REPLICATED | FCVAR_SPONLY | FCVAR_DONTRECORD | FCVAR_NOTIFY);
+
+	Convars[Ban] = CreateConVar("sbpp_discord_banhook", "", "Discord web hook endpoint for ban forward. Leave empty to disable.", FCVAR_PROTECTED);
+	
+	Convars[Report] = CreateConVar("sbpp_discord_reporthook", "", "Discord web hook endpoint for report forward. Leave empty to disable.", FCVAR_PROTECTED);
+	
+	Convars[Comms] = CreateConVar("sbpp_discord_commshook", "", "Discord web hook endpoint for comms forward. Leave empty to disable.", FCVAR_PROTECTED);
+
+	WebsiteBaseURL = CreateConVar("sbpp_website_url", "", "The base url of your website. Leave empty to disable.");
+
+	Username = CreateConVar("sbpp_discord_username", "Sourcebans++", "The username of the webhook.");
+
+	ProfilePictureURL = CreateConVar("sbpp_discord_pp_url", "https://sbpp.github.io/img/favicons/android-chrome-512x512.png", "A URL pointing to the profile picture for the webhook.");
+
+	DiscordRoleID = CreateConVar("sbpp_discord_roleid", "", "The Discord role id that you would like mentioned when receiving a report. Leave empty to disable.");
+
+	AutoExecConfig(true,"sbpp_discord");
+
+	Convars[Ban].AddChangeHook(OnConvarChanged);
+	Convars[Report].AddChangeHook(OnConvarChanged);
+	Convars[Comms].AddChangeHook(OnConvarChanged);
+	DiscordRoleID.AddChangeHook(OnConvarChanged);
+}
+
 public void OnConfigsExecuted()
 {
 	FindConVar("hostname").GetString(sHostname, sizeof sHostname);
